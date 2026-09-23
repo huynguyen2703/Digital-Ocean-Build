@@ -4,6 +4,7 @@
    - `database.py`: SQLModel engine initialization and session dependency generator.
    - `models.py`: Database tables (SQLModel) and API request/response schemas (Pydantic).
    - `service.py`: Domain logic, state management, and database mutations.
+   - `repository.py`: Database operation interaction layer, shouldn't use service to directly talk to the database
    - `main.py`: FastAPI endpoints using `Depends(get_session)` and lifespan startup.
 
 2. **Testing Standards**: All test cases MUST reside in `backend/tests/`.
