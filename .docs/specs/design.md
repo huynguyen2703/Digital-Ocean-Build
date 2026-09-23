@@ -11,16 +11,18 @@ This document separates implementable components, contracts, primitives, failure
 
 | Component | File | Responsibility |
 |-----------|------|----------------|
-| HTTP edge | `backend/app/main.py` | Routes, status codes, `Depends(get_session)`, lifespan (create tables), mount middleware |
+| HTTP edge | `backend/app/main.py` | **Async** routes, status codes, `Depends(get_session)`, lifespan (create tables), mount middleware |
 | Observability | `backend/app/observability.py` | `X-Trace-Id` middleware; global exception → JSON error body |
-| Domain service | `backend/app/service.py` | State pattern, evaluate precedence, LRU+TTL cache, rate limiter, cache invalidation |
-| Repository | `backend/app/repository.py` | SQLite CRUD only; `try/except` fail-open isolation; typed errors upward |
+| Domain service | `backend/app/service.py` | State pattern, evaluate precedence, LRU+TTL cache, rate limiter, cache invalidation (`asyncio.Lock`) |
+| Repository | `backend/app/repository.py` | **Async** SQLite CRUD only; `try/except` fail-open isolation; typed errors upward |
 | Models | `backend/app/models.py` | SQLModel tables + Pydantic request/response DTOs |
-| Database | `backend/app/database.py` | Engine, `get_session()` short-lived generator |
-| Tests | `backend/tests/conftest.py`, `backend/tests/test_main.py` | Fixtures + integration/unit coverage |
+| Database | `backend/app/database.py` | Async engine (`aiosqlite`), `get_session()` async generator |
+| Tests | `backend/tests/conftest.py`, `backend/tests/test_main.py` | Fixtures + integration/unit coverage (`pytest-asyncio`) |
 
-**Dependency rule:** `main` → `service` → `repository` → session/SQLModel.  
+**Dependency rule:** `main` → `service` → `repository` → async session/SQLModel.  
 Handlers never talk to the DB. Repository never imports service. Cache/rate-limit/state live in service.
+
+**Concurrency mandate:** many concurrent users on a single node via asyncio I/O (non-blocking DB). Not multi-node scale-out.
 
 ### 1.2 Request Lifecycle (ASCII)
 
@@ -38,17 +40,18 @@ Client
 |   service.py     |
 |  - State pattern |     +---------------------------+
 |  - evaluate()    |---->| LRU cache (OrderedDict)   |
-|  - mutations     |     | TTL + global Lock         |
+|  - mutations     |     | TTL + asyncio.Lock        |
 +--------+---------+     +---------------------------+
-         | miss / write
+         | miss / write (await)
          v
 +------------------+     fail-open try/except
 | repository.py    | ------------------------------> typed StorageError
+| (async methods)  |
 +--------+---------+
          |
          v
 +------------------+
-| SQLite (SQLModel)|  short-lived Session per request
+| SQLite+aiosqlite |  short-lived AsyncSession per request
 +------------------+
 ```
 
@@ -57,13 +60,13 @@ Client
 ```
 GET /flags/{name}/evaluate?user_id=U
   1. Rate limit (sliding window) --exceed--> 429
-  2. Cache lookup key=(name,U) under Lock
+  2. Cache lookup key=(name,U) under asyncio.Lock
        HIT + not expired --> return EvaluationResponse (fail-open path if DB later unused)
-       MISS --> repository.get_flag(name)
+       MISS --> await repository.get_flag(name)
                  missing --> 404
-               repository.get_override(name,U) optional
+               await repository.get_override(name,U) optional
                State/precedence --> enabled + source
-               Cache put (Lock) --> return 200
+               Cache put (asyncio.Lock) --> return 200
   3. On DB error:
        cache HIT usable --> return cached (fail-open)
        else --> 503
@@ -74,15 +77,15 @@ GET /flags/{name}/evaluate?user_id=U
 ```
 Write request
   --> service applies State transition (Enabled/Disabled)
-  --> repository persist
+  --> await repository persist
         fail --> 503 (do not treat as committed; do not poison cache as success)
-        ok   --> invalidate cache keys under Lock --> 2xx response
+        ok   --> invalidate cache keys under asyncio.Lock --> 2xx response
 ```
 
 Global patch: invalidate all evaluation keys for `flag_name` (scan keys with prefix or secondary index set).  
 Targeting PUT/DELETE: invalidate only `(flag_name, user_id)`.
 
-No background loops required for MVP (no async workers). Lifespan only initializes schema.
+No background worker loops required for MVP. Lifespan only initializes schema (`run_sync(create_all)`).
 
 ---
 
@@ -92,20 +95,22 @@ No background loops required for MVP (no async workers). Lifespan only initializ
 |-----------|------|-----------|
 | `collections.OrderedDict` | Evaluation LRU cache | O(1) get/move_to_end/evict from front (hash + DLL ordering) |
 | `dict` value payload | `{enabled, source, expires_at}` per cache entry | Structured evaluate result + TTL |
-| `threading.Lock` | Global lock around cache + rate-limit maps | Sync SQLModel/SQLite session model; FastAPI runs sync route handlers in threadpool — one process-wide lock keeps cache consistent without asyncio mixing |
+| `asyncio.Lock` | Global lock around cache + rate-limit maps | Matches async request path; safe across concurrent coroutines on one event loop |
 | `collections.deque` | Per-client sliding window of request timestamps | O(1) append/popleft; bound memory by dropping old stamps |
 | `dict[str, deque]` | Rate-limit buckets keyed by client id (IP or `X-Forwarded-For` / fallback `"global"`) | In-process only; acceptable single-node |
-| SQLModel `Session` | Short-lived unit of work | `Depends(get_session)` yield/close per request |
+| SQLModel `AsyncSession` | Short-lived unit of work | `Depends(get_session)` async yield/close per request |
+| `aiosqlite` | Async SQLite driver | Non-blocking DB I/O for many concurrent users |
 | Unique DB indexes | `Flag.name`; `(UserFlagOverride.flag_name, user_id)` | Enforce 409 / fast lookup |
 
-**Not used (constraints):** Redis, Kafka, Celery, `asyncio.Queue`, multiprocessing shared memory.
+**Not used (constraints):** Redis, Kafka, Celery, `threading.Lock` on the hot path, multiprocessing shared memory.
 
 **Defaults (configurable constants in service):**
 - `CACHE_MAX_SIZE = 10_000`
 - `CACHE_TTL_SECONDS = 30`
 - `RATE_LIMIT_WINDOW_SECONDS = 60`
 - `RATE_LIMIT_MAX_REQUESTS = 120` (evaluate; stricter optional on writes)
-- `RETRY_AFTER_BASE_SECONDS = 1` (hint for exponential client backoff)
+- `RETRY_AFTER_BASE_SECONDS = 1`
+- `RETRY_AFTER_CAP_SECONDS = 60` (exponential `Retry-After = min(cap, base * 2^(streak-1))`)
 
 ---
 
@@ -214,29 +219,30 @@ Validation mirrors requirements: name slug `^[a-z][a-z0-9_]{1,63}$`; description
 ## 5. Component Specs (What to Implement)
 
 ### 5.1 `database.py`
-- SQLite URL (file for prod/dev; tests override to `:memory:` or temp file).
-- `create_engine(..., connect_args={"check_same_thread": False})` for SQLite.
-- `get_session()` generator yielding `Session`, closes in `finally`.
+- Async SQLite URL (`sqlite+aiosqlite:///...`; tests use `:memory:` or temp file via `init_engine`).
+- `create_async_engine(...)`.
+- `async def get_session()` yielding `AsyncSession`, closed after request.
+- Schema create via lifespan: `await conn.run_sync(SQLModel.metadata.create_all)`.
 
 ### 5.2 `repository.py`
-- Methods: `create_flag`, `get_flag_by_name`, `update_flag_enabled`, `upsert_override`, `get_override`, `delete_override`.
+- **Async** methods: `create_flag`, `get_flag_by_name`, `update_flag_enabled`, `upsert_override`, `get_override`, `delete_override`.
 - Catch SQLAlchemy/SQLModel exceptions → raise domain `StorageError` / `ConflictError` / `NotFoundError` (defined in service or shared errors module inside these files — prefer small exception classes in `repository.py` or `service.py`, not a new package unless needed).
 - Never crash the process; no bare `except:` swallowing without log.
 
 ### 5.3 `service.py`
-- Singleton-ish module-level `FlagService` holding: cache, lock, rate-limit state, TTL/max config.
-- State classes + transitions.
-- Cache get/put/invalidate under lock.
-- Rate limit before evaluate (and optionally writes).
-- Orchestrates repository; maps errors to HTTP-meaningful exceptions for `main` (`HTTPException` raise either in main or via service helpers — prefer **main maps domain errors → HTTP** so service stays framework-light).
+- Singleton-ish module-level `FlagService` holding: cache, **`asyncio.Lock`**, rate-limit state, TTL/max config.
+- State classes + transitions (sync pure logic is fine inside async methods).
+- Cache get/put/invalidate under `async with lock`.
+- Rate limit before evaluate (and optionally writes); exponential `Retry-After`.
+- `async` orchestration of repository; maps errors to HTTP-meaningful exceptions for `main` (prefer **main maps domain errors → HTTP** so service stays framework-light).
 
 ### 5.4 `observability.py`
 - Middleware: ensure `X-Trace-Id` on request/response.
 - Handler for uncaught exceptions → `500` + `ErrorBody`.
 
 ### 5.5 `main.py`
-- Lifespan: `SQLModel.metadata.create_all`.
-- Wire routes; inject session; call service; translate domain errors to status codes.
+- Async lifespan: create tables.
+- Wire **async** routes; inject session; `await` service; translate domain errors to status codes.
 
 ---
 
@@ -244,13 +250,14 @@ Validation mirrors requirements: name slug `^[a-z][a-z0-9_]{1,63}$`; description
 
 | Boundary | Strategy |
 |----------|----------|
-| Cache races | Single `threading.Lock` for get/put/evict/invalidate |
-| Rate-limit races | Same lock or dedicated lock; MVP may share global lock |
-| Session leaks | `get_session` always closes |
+| Cache races | Single `asyncio.Lock` for get/put/evict/invalidate |
+| Rate-limit races | Same lock or dedicated `asyncio.Lock`; MVP may share global lock |
+| Session leaks | `get_session` always closes / exits async context |
 | Write + cache | Persist first; invalidate only after successful commit |
 | Evaluate + DB down | Fail-open on valid cache hit; else 503 |
 | Duplicate create | Unique constraint → `ConflictError` → 409 |
 | Stale evaluate after global change | Invalidate all keys for flag name under lock |
+| Event-loop blocking | No sync SQLite/`time.sleep` on hot path |
 
 No distributed locking (single-node).
 
@@ -264,8 +271,8 @@ All tests live under `backend/tests/`, runnable with `pytest`. Prefer **TestClie
 
 | Fixture | Requirement |
 |---------|-------------|
-| `engine` / `session` | Isolated in-memory SQLite; create schema per test (function scope) |
-| `client` | FastAPI `TestClient` with overridden `get_session` dependency |
+| `engine` / `session` | Isolated in-memory async SQLite; create schema per test (function scope) |
+| `client` | `httpx.AsyncClient` (or async TestClient) with overridden `get_session` |
 | `service` reset | Clear LRU cache + rate-limit buckets between tests (autouse fixture or client factory) |
 
 Tests must not share mutable cache/rate-limit state across cases.

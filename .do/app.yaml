@@ -1,12 +1,44 @@
-name: do-prototype-app
+# DigitalOcean App Platform — Feature Flag Service
+# In-memory LRU cache + asyncio.Lock are process-local: keep instance_count at 1.
+name: digital-ocean-feature-flag-build
 region: sfo
 services:
-- name: api
-  github:
-    repo: YOUR_GITHUB_USERNAME/project-template
-    branch: main
-    deploy_on_push: true
-  dockerfile_path: Dockerfile
-  http_port: 8080
-  instance_count: 1
-  instance_size_slug: basic-xxs
+  - name: api
+    github:
+      repo: huynguyen2703/Digital-Ocean-Build
+      branch: main
+      deploy_on_push: true
+    dockerfile_path: Dockerfile
+    http_port: 8080
+    # Must stay 1: FlagService cache and rate-limit state live in one process.
+    # Scaling >1 would shard traffic across inconsistent in-memory caches
+    # (no Redis/shared store — out of scope per requirements).
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    envs:
+      # Absolute SQLite path on the writable /data volume mount point in the image.
+      # Note: App Platform ephemeral disk — data resets on redeploy unless a
+      # DO volume is attached later; do not put secrets in this file.
+      - key: DATABASE_URL
+        value: "sqlite+aiosqlite:////data/feature_flags.db"
+        scope: RUN_TIME
+      - key: CACHE_MAX_SIZE
+        value: "10000"
+        scope: RUN_TIME
+      - key: CACHE_TTL_SECONDS
+        value: "30"
+        scope: RUN_TIME
+      - key: RATE_LIMIT_WINDOW_SECONDS
+        value: "60"
+        scope: RUN_TIME
+      - key: RATE_LIMIT_MAX_REQUESTS
+        value: "120"
+        scope: RUN_TIME
+    # Failing health checks keep the previous deployment live (auto rollback).
+    health_check:
+      http_path: /health
+      initial_delay_seconds: 10
+      period_seconds: 10
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 3

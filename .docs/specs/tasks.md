@@ -15,11 +15,11 @@ Legend: `[ ]` not done · `[x]` done
 **Requirements satisfied:** eng bar for isolated pytest runs (req §3.5); design §7.1 fixtures foundation
 
 ### Sub-tasks
-- [ ] Ensure `backend/tests/conftest.py` can host shared fixtures (placeholder OK until Task 1 wires DB)
-- [ ] Confirm `pytest` discovers `backend/tests/`
+- [x] Ensure `backend/tests/conftest.py` can host shared fixtures (placeholder OK until Task 1 wires DB)
+- [x] Confirm `pytest` discovers `backend/tests/`
 
 ### Tests (this task)
-- [ ] Minimal smoke: `pytest` collects at least one placeholder or skips cleanly (replace in Task 1)
+- [x] Minimal smoke: `pytest` collects at least one placeholder or skips cleanly (replace in Task 1)
 
 ---
 
@@ -28,16 +28,18 @@ Legend: `[ ]` not done · `[x]` done
 **Primary files:** `backend/app/database.py`  
 **Paired tests:** `backend/tests/test_database.py`  
 **Prerequisites:** Task 0  
-**Requirements satisfied:** short-lived sessions (req §3.4); SQLite engine (req §2.6); design §5.1
+**Requirements satisfied:** short-lived **async** sessions (req §3.4); SQLite + `aiosqlite` (req §2.6); many-user concurrency must (req §3.1); design §5.1  
+
+**Revision:** Task 1 retargeted from sync → async after concurrency mandate approval.
 
 ### Sub-tasks
-- [ ] Create SQLite engine (`check_same_thread=False`)
-- [ ] Implement `get_session()` generator (yield + close in `finally`)
-- [ ] Expose a way for tests to point at in-memory / temp SQLite
+- [x] Create **async** SQLite engine (`sqlite+aiosqlite`, `create_async_engine`)
+- [x] Implement `async def get_session()` generator (yield `AsyncSession` + close)
+- [x] Expose `init_engine()` for tests (in-memory / temp async SQLite)
 
 ### Tests (`test_database.py`)
-- [ ] Session yields a usable `Session` and closes after use
-- [ ] Engine can create metadata when models exist (light assert; full schema in Task 2)
+- [x] Async session yields usable session and closes after use
+- [x] Engine can create metadata when models exist (light assert; full schema in Task 2)
 
 ---
 
@@ -49,14 +51,14 @@ Legend: `[ ]` not done · `[x]` done
 **Requirements satisfied:** Flag + UserFlagOverride durable shape (req §2.1); unique name / unique `(flag_name, user_id)` (design §4.1)
 
 ### Sub-tasks
-- [ ] `Flag` table: `name` (unique), `description`, `enabled`, timestamps
-- [ ] `UserFlagOverride` table: `flag_name`, `user_id`, `enabled`, `updated_at`, unique pair
-- [ ] Do **not** add API Pydantic schemas yet (Task 3)
+- [x] `Flag` table: `name` (unique), `description`, `enabled`, timestamps
+- [x] `UserFlagOverride` table: `flag_name`, `user_id`, `enabled`, `updated_at`, unique pair
+- [x] Do **not** add API Pydantic schemas yet (Task 3)
 
 ### Tests (`test_models.py`)
-- [ ] Create tables via `SQLModel.metadata.create_all`
-- [ ] Insert Flag; duplicate `name` raises integrity error
-- [ ] Insert override; duplicate `(flag_name, user_id)` raises integrity error
+- [x] Create tables via `SQLModel.metadata.create_all`
+- [x] Insert Flag; duplicate `name` raises integrity error
+- [x] Insert override; duplicate `(flag_name, user_id)` raises integrity error
 
 ---
 
@@ -68,17 +70,17 @@ Legend: `[ ]` not done · `[x]` done
 **Requirements satisfied:** validation rules (req §2.4); design §4.2 DTOs
 
 ### Sub-tasks
-- [ ] Add `FlagCreate`, `FlagUpdate`, `FlagRead`
-- [ ] Add `UserOverrideUpsert`, `UserOverrideRead`
-- [ ] Add `EvaluationResponse` (`source`: `override` | `global`)
-- [ ] Add `ErrorBody` (`detail`, `trace_id`)
-- [ ] Enforce name slug, description max 512, `user_id` 1..128
+- [x] Add `FlagCreate`, `FlagUpdate`, `FlagRead`
+- [x] Add `UserOverrideUpsert`, `UserOverrideRead`
+- [x] Add `EvaluationResponse` (`source`: `override` | `global`)
+- [x] Add `ErrorBody` (`detail`, `trace_id`)
+- [x] Enforce name slug, description max 512, `user_id` 1..128
 
 ### Tests (`test_models.py`)
-- [ ] Valid `FlagCreate` accepted
-- [ ] Invalid flag `name` rejected
-- [ ] Empty / whitespace `user_id` rejected where validated
-- [ ] `EvaluationResponse` accepts only `override` | `global`
+- [x] Valid `FlagCreate` accepted
+- [x] Invalid flag `name` rejected
+- [x] Empty / whitespace `user_id` rejected where validated
+- [x] `EvaluationResponse` accepts only `override` | `global`
 
 ---
 
@@ -90,18 +92,18 @@ Legend: `[ ]` not done · `[x]` done
 **Requirements satisfied:** fail-open isolation / typed errors (req §4.4); no service→DB bypass (structure); design §5.2
 
 ### Sub-tasks
-- [ ] Define typed errors: `StorageError`, `NotFoundError`, `ConflictError`
-- [ ] `create_flag`, `get_flag_by_name`, `update_flag_enabled`
-- [ ] `upsert_override`, `get_override`, `delete_override`
-- [ ] Wrap DB failures in `try/except` → `StorageError` (no process crash)
-- [ ] Repository must **not** import service
+- [x] Define typed errors: `StorageError`, `NotFoundError`, `ConflictError`
+- [x] **Async** `create_flag`, `get_flag_by_name`, `update_flag_enabled`
+- [x] **Async** `upsert_override`, `get_override`, `delete_override`
+- [x] Wrap DB failures in `try/except` → `StorageError` (no process crash / no event-loop kill)
+- [x] Repository must **not** import service
 
 ### Tests (`test_repository.py`)
-- [ ] Create + get flag by name
-- [ ] Duplicate create → `ConflictError`
-- [ ] Missing get → `NotFoundError` (or `None` + documented; prefer explicit NotFound for get-or-raise helpers)
-- [ ] Upsert override; get; delete; delete missing → `NotFoundError`
-- [ ] Forced DB failure path maps to `StorageError` (mock/break session)
+- [x] Create + get flag by name
+- [x] Duplicate create → `ConflictError`
+- [x] Missing get → `NotFoundError` (or `None` + documented; prefer explicit NotFound for get-or-raise helpers)
+- [x] Upsert override; get; delete; delete missing → `NotFoundError`
+- [x] Forced DB failure path maps to `StorageError` (mock/break session)
 
 ---
 
@@ -113,25 +115,25 @@ Legend: `[ ]` not done · `[x]` done
 **Requirements satisfied:** State pattern (req §2.3.1); evaluate precedence (req §2.2); LRU+TTL cache O(1) (req §3.2–3.3); global lock (req §3.4); invalidation (req §4.2); rate limit + exponential `Retry-After` (req §4.3); fail-open evaluate (req §4.4); design §2–3, §5.3
 
 ### Sub-tasks
-- [ ] `EnabledState` / `DisabledState` + `state_from_bool` / transitions
-- [ ] Module-level service with `threading.Lock`, `OrderedDict` LRU, TTL, max size
-- [ ] `create_flag`, `get_flag`, `set_global_state` (via State), `set_user_targeting`, `clear_user_targeting`, `evaluate`
-- [ ] Cache get/put/invalidate under lock; invalidate on successful writes only
-- [ ] Sliding-window rate limit; on exceed compute exponential backoff:
+- [x] `EnabledState` / `DisabledState` + `state_from_bool` / transitions
+- [x] Module-level service with **`asyncio.Lock`**, `OrderedDict` LRU, TTL, max size
+- [x] **Async** `create_flag`, `get_flag`, `set_global_state` (via State), `set_user_targeting`, `clear_user_targeting`, `evaluate`
+- [x] Cache get/put/invalidate under `async with lock`; invalidate on successful writes only
+- [x] Sliding-window rate limit; on exceed compute exponential backoff:
   - track consecutive 429 streak per client key
   - `Retry-After = min(cap, base * 2^(streak-1))`
   - reset streak after a successful (non-429) evaluate
-- [ ] Evaluate: cache → repo → precedence → cache fill; fail-open on cache hit if repo errors
-- [ ] Map/raise domain errors for later HTTP translation (keep FastAPI out of service if possible)
+- [x] Evaluate: cache → await repo → precedence → cache fill; fail-open on cache hit if repo errors
+- [x] Map/raise domain errors for later HTTP translation (keep FastAPI out of service if possible)
 
 ### Tests (`test_service.py`) — only what is needed
-- [ ] State: enable/disable transitions + idempotent enable/disable
-- [ ] Precedence: override wins over global; clear override falls back to global
-- [ ] Unknown flag evaluate → not-found domain error
-- [ ] Cache invalidation: after global/targeting change, evaluate result updates
-- [ ] Rate limit: exceeding window raises rate-limit error with increasing `Retry-After` on consecutive hits
-- [ ] Fail-open: seeded cache + repo `StorageError` on evaluate still returns cached result
-- [ ] Write + repo `StorageError` → error surfaced; cache not treated as committed success
+- [x] State: enable/disable transitions + idempotent enable/disable
+- [x] Precedence: override wins over global; clear override falls back to global
+- [x] Unknown flag evaluate → not-found domain error
+- [x] Cache invalidation: after global/targeting change, evaluate result updates
+- [x] Rate limit: exceeding window raises rate-limit error with increasing `Retry-After` on consecutive hits
+- [x] Fail-open: seeded cache + repo `StorageError` on evaluate still returns cached result
+- [x] Write + repo `StorageError` → error surfaced; cache not treated as committed success
 
 ---
 
@@ -143,12 +145,12 @@ Legend: `[ ]` not done · `[x]` done
 **Requirements satisfied:** `X-Trace-Id` + 500 mapping (req §2.4, §3.5); design §5.4
 
 ### Sub-tasks
-- [ ] Middleware: accept/propagate/generate `X-Trace-Id` on response
-- [ ] Unhandled exception handler → `500` + `ErrorBody` with `trace_id`
+- [x] Middleware: accept/propagate/generate `X-Trace-Id` on response
+- [x] Unhandled exception handler → `500` + `ErrorBody` with `trace_id`
 
 ### Tests (`test_observability.py`)
-- [ ] Response includes `X-Trace-Id` (via minimal app mount or shared test app stub)
-- [ ] Unhandled error returns `500` and includes `trace_id` in body
+- [x] Response includes `X-Trace-Id` (via minimal app mount or shared test app stub)
+- [x] Unhandled error returns `500` and includes `trace_id` in body
 
 ---
 
@@ -160,25 +162,25 @@ Legend: `[ ]` not done · `[x]` done
 **Requirements satisfied:** all API contracts + status codes (req §2.3, §2.5); validation 400; wiring design §4.3–4.4, §5.5
 
 ### Sub-tasks
-- [ ] Lifespan: `create_all` on startup
-- [ ] Mount observability middleware/handlers
-- [ ] Routes only: validate → service → map domain errors → HTTP
+- [x] Lifespan: async `create_all` on startup
+- [x] Mount observability middleware/handlers
+- [x] **Async** routes only: validate → await service → map domain errors → HTTP
   - `POST /flags` → 201 / 409 / 400
   - `GET /flags/{name}` → 200 / 404
   - `PATCH /flags/{name}` → 200 / 400 / 404
   - `PUT /flags/{name}/users/{user_id}` → 200 / 400 / 404
   - `DELETE /flags/{name}/users/{user_id}` → 204 / 404
   - `GET /flags/{name}/evaluate?user_id=` → 200 / 400 / 404 / 429 / 503
-- [ ] Do not put business rules or SQL in handlers
+- [x] Do not put business rules or SQL in handlers; do not block the event loop on sync DB I/O
 
 ### Tests (`test_main.py`) — API behavior only
-- [ ] Create flag `201`; duplicate `409`; bad name `400`
-- [ ] Get / patch happy paths; unknown `404`
-- [ ] Targeting PUT/DELETE; evaluate precedence end-to-end (`source` field)
-- [ ] Evaluate missing `user_id` / invalid → `400`
-- [ ] Burst evaluate → `429` + `Retry-After` header
-- [ ] `X-Trace-Id` present on success response
-- [ ] (Optional single case) force storage failure on write → `503` if easy via dependency override; skip if already covered in `test_service.py`
+- [x] Create flag `201`; duplicate `409`; bad name `400`
+- [x] Get / patch happy paths; unknown `404`
+- [x] Targeting PUT/DELETE; evaluate precedence end-to-end (`source` field)
+- [x] Evaluate missing `user_id` / invalid → `400`
+- [x] Burst evaluate → `429` + `Retry-After` header
+- [x] `X-Trace-Id` present on success response
+- [x] (Optional single case) force storage failure on write → `503` if easy via dependency override; skip if already covered in `test_service.py`
 
 ---
 
@@ -190,12 +192,12 @@ Legend: `[ ]` not done · `[x]` done
 **Note:** no new product features
 
 ### Sub-tasks
-- [ ] README: setup, run uvicorn, run pytest
-- [ ] CI runs pytest on `backend/`
-- [ ] Point to design ASCII as architecture anchor (link to `design.md` §1.2)
+- [x] README: setup, run uvicorn, run pytest
+- [x] CI runs pytest on `backend/`
+- [x] Point to design ASCII as architecture anchor (link to `design.md` §1.2)
 
 ### Tests
-- [ ] CI job passes (no extra test types)
+- [x] CI job passes (no extra test types)
 
 ---
 

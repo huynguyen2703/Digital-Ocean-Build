@@ -1,0 +1,40 @@
+# Git / VCS
+.git
+.gitignore
+
+# Local env and secrets — never bake into the image
+.env
+.env.*
+!.env.example
+
+# Python junk
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Local SQLite / data artifacts
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# Docs / IDE / CI noise (not required at runtime)
+.docs/
+.cursor/
+.vscode/
+*.md
+!requirements.txt
+
+# Tests are not needed in the runtime image
+backend/tests/
+
+# Docker / deploy meta (not required inside the image)
+.dockerignore
+.do/
+.github/

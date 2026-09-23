@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-Build a production-ready, single-node REST API that stores feature flag definitions for **release targeting**: operators manage whether a feature is on globally or targeted to specific users, and the service evaluates availability for a given user. Flags belong to **management/release control**, not to users as owned objects. Evaluation must be cache-accelerated. Users are assumed to exist externally; this service does not manage user identity (no user CRUD, no authentication in MVP).
+Build a production-ready, single-node REST API that stores feature flag definitions for **release targeting**: operators manage whether a feature is on globally or targeted to specific users, and the service evaluates availability for a given user. Flags belong to **management/release control**, not to users as owned objects. Evaluation must be cache-accelerated. The service must support **many concurrent users** via an **async I/O** request path (non-blocking DB and handlers). Users are assumed to exist externally; this service does not manage user identity (no user CRUD, no authentication in MVP).
 
 ## 2. Functional Requirements
 
@@ -124,7 +124,7 @@ Invalid input → **400** with a clear error body. Unhandled failures → **500*
 
 ### 2.6 Persistence & Cache Semantics
 
-- **Durable store**: SQLite via SQLModel. Flag definitions and overrides must survive process restart.
+- **Durable store**: SQLite via SQLModel over **async** driver (`aiosqlite`). Flag definitions and overrides must survive process restart.
 - **Hot path**: in-memory evaluation (and/or flag) cache with TTL and LRU eviction.
 - **Mutations** (create, patch global, set/clear override) must persist to SQLite. If persistence fails → **503**; do not silently claim success.
 - **Reads/evaluate**: prefer cache; on miss read SQLite. If SQLite fails but a valid (non-expired) cache entry exists → **fail-open** and return cached result. If SQLite fails and cache miss → **503**.
@@ -143,16 +143,17 @@ Invalid input → **400** with a clear error body. Unhandled failures → **500*
 
 ### 3.1 Runtime Constraints
 
-- **Environment**: single-node Python 3.13 process; FastAPI + Uvicorn.
-- **Infrastructure**: no external brokers (no Redis, Kafka, Celery).
+- **Environment**: single-node Python 3.13 process; FastAPI + Uvicorn with **async** route handlers.
+- **Concurrency model (must)**: asyncio end-to-end for request I/O — async sessions, async repository/service methods awaited from handlers. Do **not** call blocking SQLite APIs on the event loop.
+- **Infrastructure**: no external brokers (no Redis, Kafka, Celery). Async improves many-user concurrency on one node; it is not multi-node scale-out.
 - **Module layout** (mandatory):
-  - `backend/app/database.py` — engine and short-lived session dependency
+  - `backend/app/database.py` — async engine and short-lived async session dependency
   - `backend/app/models.py` — Pydantic DTOs + SQLModel entities
   - `backend/app/observability.py` — `X-Trace-Id`, global error handling
-  - `backend/app/repository.py` — storage access with fail-open isolation
+  - `backend/app/repository.py` — async storage access with fail-open isolation
   - `backend/app/service.py` — domain logic (State pattern), cache, rate limiting, locks
-  - `backend/app/main.py` — routes, middleware, lifespan
-  - `backend/tests/` — pytest unit/integration tests
+  - `backend/app/main.py` — async routes, middleware, lifespan
+  - `backend/tests/` — pytest (+ pytest-asyncio) unit/integration tests
 
 ### 3.2 Latency & Complexity
 
@@ -172,9 +173,10 @@ Invalid input → **400** with a clear error body. Unhandled failures → **500*
 
 ### 3.4 Concurrency
 
-- Shared cache is a critical section: protect with a **global lock** (`threading.Lock` or `asyncio.Lock` consistent with the async/sync model chosen in design).
-- HTTP handlers must not run long CPU-bound work inline; keep request path thin (validate → service → repository).
-- Database sessions are **short-lived** per request (`Depends(get_session)`); always closed after the request.
+- **Must** serve many concurrent evaluate/management requests without blocking the event loop on DB I/O.
+- Shared cache is a critical section: protect with a single process-wide **`asyncio.Lock`**.
+- HTTP handlers are `async def`; they await service/repository; no long CPU-bound work inline.
+- Database sessions are **short-lived** per request (`Depends(get_session)` async generator); always closed after the request.
 
 ### 3.5 Observability & Engineering Bar
 
