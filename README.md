@@ -161,6 +161,80 @@ docker run --rm -p 8080:8080 feature-flag-api
 
 App Platform config: [`.do/app.yaml`](.do/app.yaml) — Dockerfile deploy, `instance_count: 1`, `/health` checks, SQLite under `/data`. Attach a DO volume later if you need durable data across redeploys (ephemeral disk resets by default).
 
+**Live URL:** https://digital-ocean-feature-flag-buil-vtpmg.ondigitalocean.app
+
+### Manual smoke tests (`curl`)
+
+Use the same commands against local Docker/uvicorn or the live App Platform URL.
+
+```bash
+# Local
+export BASE_URL=http://127.0.0.1:8080
+
+# Live App Platform deploy
+export BASE_URL=https://digital-ocean-feature-flag-buil-vtpmg.ondigitalocean.app
+```
+
+```bash
+# Health (App Platform health check path)
+curl -sS -D- "$BASE_URL/health"
+
+# Create a flag → expect 201 and X-Trace-Id
+curl -sS -D- -X POST "$BASE_URL/flags" \
+  -H 'Content-Type: application/json' \
+  -H 'X-Trace-Id: manual-1' \
+  -d '{"name":"dark_mode","description":"test","enabled":false}'
+
+# Get flag → 200
+curl -sS "$BASE_URL/flags/dark_mode"
+
+# Enable globally → 200
+curl -sS -X PATCH "$BASE_URL/flags/dark_mode" \
+  -H 'Content-Type: application/json' \
+  -d '{"enabled":true}'
+
+# Per-user targeting → 200
+curl -sS -X PUT "$BASE_URL/flags/dark_mode/users/user-1" \
+  -H 'Content-Type: application/json' \
+  -d '{"enabled":false}'
+
+# Evaluate → 200, source should be "override", enabled false
+curl -sS "$BASE_URL/flags/dark_mode/evaluate?user_id=user-1"
+
+# Clear targeting → 204
+curl -sS -D- -X DELETE "$BASE_URL/flags/dark_mode/users/user-1"
+
+# Evaluate again → source "global", enabled true
+curl -sS "$BASE_URL/flags/dark_mode/evaluate?user_id=user-1"
+
+# Duplicate create → 409
+curl -sS -D- -X POST "$BASE_URL/flags" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"dark_mode","enabled":false}'
+
+# Bad name → 400
+curl -sS -D- -X POST "$BASE_URL/flags" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Bad-Name","enabled":false}'
+
+# Missing user_id → 400
+curl -sS -D- "$BASE_URL/flags/dark_mode/evaluate"
+
+# Burst evaluate → eventually 429 with Retry-After (default limit 120/min)
+for i in $(seq 1 130); do
+  curl -sS -o /dev/null -w "%{http_code}\n" \
+    "$BASE_URL/flags/dark_mode/evaluate?user_id=burst"
+done
+```
+
+**What “good” looks like after deploy**
+
+- `/health` returns `{"status":"ok"}` and App Platform health checks stay green  
+- Create → target → evaluate round-trip returns expected `source` / `enabled`  
+- Responses include `X-Trace-Id`; `429` includes `Retry-After`  
+- Optional: open `$BASE_URL/docs` for interactive Swagger  
+- Watch **Runtime Logs** in the DO console while curling  
+
 ---
 
 ## How this project was built (specs + AI-assisted workflow)
